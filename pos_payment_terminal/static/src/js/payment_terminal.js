@@ -34,6 +34,7 @@ odoo.define("pos_payment_terminal.payment", function(require) {
         },
 
         _oca_payment_terminal_pay: function() {
+            var self = this;
             var order = this.pos.get_order();
             var pay_line = order.selected_paymentline;
             var currency = this.pos.currency;
@@ -64,7 +65,7 @@ odoo.define("pos_payment_terminal.payment", function(require) {
                     );
                     // There was an error, let the user retry.
                     return false;
-                } else if (response instanceof Object && "transaction_id" in response) {
+                } else if (response instanceof Object && "transaction_id" in response && response.transaction_id) {
                     // The response has a terminal transaction identifier:
                     // return a promise that polls for transaction status.
                     pay_line.set_payment_status("waitingCard");
@@ -72,6 +73,9 @@ odoo.define("pos_payment_terminal.payment", function(require) {
                         pay_line,
                         response
                     );
+                    if (self.pos.chrome.gui.current_screen && self.pos.chrome.gui.current_screen.render_paymentlines) {
+                        self.pos.chrome.gui.current_screen.render_paymentlines();
+                    }
                     return new Promise((resolve, reject) => {
                         this._oca_poll_for_transaction_status(
                             pay_line,
@@ -93,7 +97,17 @@ odoo.define("pos_payment_terminal.payment", function(require) {
         },
 
         _oca_poll_for_transaction_status: function(pay_line, resolve, reject) {
+            var retries = 0;
+            var got_response = false;
             var timerId = setInterval(() => {
+                ++retries;
+                if (retries > 300) {
+                    // if the total card payment flow takes more than 5 minutes,
+                    // consider it a dead end and don't keep polling (prevent endless polls)
+                    clearInterval(timerId);
+                    pay_line.set_payment_status("force_done");
+                    reject();
+                }
                 // Query the driver status more frequently than the regular POS
                 // proxy, to get faster feedback when the transaction is
                 // complete on the terminal.
@@ -101,11 +115,18 @@ odoo.define("pos_payment_terminal.payment", function(require) {
                 if (this.payment_method.oca_payment_terminal_id) {
                     status_params.terminal_id = this.payment_method.oca_payment_terminal_id;
                 }
+                // if a user action already update the transaction status, dont bother
+                if ((pay_line.payment_status == 'done') || (pay_line.payment_status == 'retry')) {
+                    clearInterval(timerId);
+                }
+                // otherwise check status
                 this.pos.proxy.connection
-                    .rpc("/hw_proxy/status_json", status_params, {
-                        shadow: true,
-                        timeout: 1000,
-                    })
+                    .rpc(
+                        // the parameter is just so that it stands out over the other network transactions
+                        "/hw_proxy/status_json?for_transaction=" + pay_line.terminal_transaction_id,
+                        status_params,
+                        {shadow: true, timeout: 1000}
+                    )
                     .then(drivers_status => {
                         for (var driver_name in drivers_status) {
                             // Look for a driver that is a payment terminal and has
@@ -120,6 +141,7 @@ odoo.define("pos_payment_terminal.payment", function(require) {
                                     transaction.transaction_id ===
                                     pay_line.terminal_transaction_id
                                 ) {
+                                    got_response = true;
                                     // Look for the transaction corresponding to
                                     // the payment line.
                                     this._oca_update_payment_line_terminal_transaction_status(
@@ -127,13 +149,21 @@ odoo.define("pos_payment_terminal.payment", function(require) {
                                         transaction
                                     );
                                     if (
-                                        pay_line.terminal_transaction_success !== null
+                                        pay_line.terminal_transaction_success !== null &&
+                                        pay_line.terminal_transaction_success !== undefined
                                     ) {
                                         resolve(pay_line.terminal_transaction_success);
                                         // Stop the loop
                                         clearInterval(timerId);
                                     }
                                 }
+                            }
+                            if (!got_response && retries > 30) {
+                                // if after 30 seconds still no word about the status of the transaction,
+                                // then consider it lost in space. Let user decide the status.
+                                clearInterval(timerId);
+                                pay_line.set_payment_status("force_done");
+                                reject();
                             }
                         }
                     })
