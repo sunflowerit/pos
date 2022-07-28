@@ -73,6 +73,7 @@ odoo.define("pos_payment_terminal.payment", function(require) {
                         pay_line,
                         response
                     );
+                    // show the new 'waiting_card' status on screen
                     if (self.pos.chrome.gui.current_screen && self.pos.chrome.gui.current_screen.render_paymentlines) {
                         self.pos.chrome.gui.current_screen.render_paymentlines();
                     }
@@ -107,6 +108,7 @@ odoo.define("pos_payment_terminal.payment", function(require) {
                     clearInterval(timerId);
                     pay_line.set_payment_status("force_done");
                     reject();
+                    return;
                 }
                 // Query the driver status more frequently than the regular POS
                 // proxy, to get faster feedback when the transaction is
@@ -115,9 +117,11 @@ odoo.define("pos_payment_terminal.payment", function(require) {
                 if (this.payment_method.oca_payment_terminal_id) {
                     status_params.terminal_id = this.payment_method.oca_payment_terminal_id;
                 }
-                // if a user action already update the transaction status, dont bother
+                // if a user action already updated the transaction status, stop checking status
                 if ((pay_line.payment_status == 'done') || (pay_line.payment_status == 'retry')) {
                     clearInterval(timerId);
+                    reject();
+                    return;
                 }
                 // otherwise check status
                 this.pos.proxy.connection
