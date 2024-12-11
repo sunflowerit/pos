@@ -7,8 +7,8 @@ from odoo import fields, models
 class ProductTemplate(models.Model):
     _inherit = "product.template"
 
-    use_deposit = fields.Boolean("Use Deposit")
-    is_deposit = fields.Boolean("Is Deposit")
+    use_deposit = fields.Boolean()
+    is_deposit = fields.Boolean()
     select_deposit = fields.Many2one(
-        "product.product", "Select Deposit", domain=[("is_deposit", "!=", False)]
+        "product.product", domain=[("is_deposit", "!=", False)]
     )
